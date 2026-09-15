@@ -1,0 +1,19 @@
+[project]
+name = "tetris"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "cxinu", email = "cxinu.main@protonmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "raylib>=6.0.1.0",
+]
+
+[project.scripts]
+tetris = "tetris:main"
+
+[build-system]
+requires = ["uv_build>=0.12.11,<0.13.0"]
+build-backend = "uv_build"
