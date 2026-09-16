@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "pyglm>=2.8.3",
     "raylib>=6.0.1.0",
 ]
 
