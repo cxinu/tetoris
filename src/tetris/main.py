@@ -280,7 +280,7 @@ class Tetris:
 
     def collision_check_rotate(self):
         collision = {"left": True, "right": True, "neural": True}
-        rotation_dir = {"left": -1, "right": 1, "neural": 0}
+        rotation_dir = {"left": 1, "right": -1, "neural": 0}
         for key, d in rotation_dir.items():
             checks_clear = all(
                 0 <= self.x + x < GRID_WIDTH
@@ -595,7 +595,7 @@ def main() -> None:
                     pr.resume_music_stream(music)
 
         elif block.game_state == "PLAYING":
-            block.fall_y += dt * 1.2
+            block.fall_y += dt
             if beat_pulse > 0.8 and beat_cooldown >= 0.15:
                 block.fall_y += 0.8
             if block.fall_y > block.y or pr.is_key_pressed(KEY_DOWN):
@@ -606,7 +606,7 @@ def main() -> None:
                     block.freeze()
                     block.play_sfx(fx_set)
 
-            if pr.is_key_pressed(KEY_SPACE) and block.y > 2:
+            if pr.is_key_pressed(KEY_SPACE) and block.y > 1:
                 block.y = block.fall_pos()
                 block.freeze()
                 block.play_sfx(fx_set)
@@ -645,13 +645,13 @@ def main() -> None:
                     block.x = next_x
 
             if (
-                pr.is_key_pressed(KEY_RIGHT_ROTATE)
-                and not block.collision_check_rotate()["right"]
+                pr.is_key_pressed(KEY_LEFT_ROTATE)
+                and not block.collision_check_rotate()["left"]
             ):
                 block.rotation = (block.rotation + 1) % 4
             elif (
-                pr.is_key_pressed(KEY_LEFT_ROTATE)
-                and not block.collision_check_rotate()["left"]
+                pr.is_key_pressed(KEY_RIGHT_ROTATE)
+                and not block.collision_check_rotate()["right"]
             ):
                 block.rotation = (block.rotation - 1) % 4
 

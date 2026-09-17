@@ -9,7 +9,6 @@ uniform vec4 colDiffuse;
 uniform float u_energy;
 uniform float u_time;
 
-// Impact & Clear Uniforms
 uniform float u_impactPulse;    // Triggers screen shake & glow spike on block set
 uniform float u_clearPulse;     // Triggers row flash on line clear
 uniform float u_clearRowY;      // Normalized Y coord (0..1) of cleared row
@@ -23,15 +22,15 @@ const vec2 resolution = vec2(480.0, 960.0);
 const float unitSize   = 48.0;
 
 const vec3 BG_BLACK    = vec3(0.04, 0.02, 0.03);
-// Warm Crimson Accent for High Contrast Grid Lines
 const vec3 GRID_ACCENT = vec3(0.85, 0.15, 0.3);
 
 void main() {
     float smoothEnergy = pow(clamp(u_energy, 0.0, 1.0), 2.0);
 
     // 0. High-Energy Impact Threshold
-    const float ENERGY_THRESHOLD = 0.99;
-    float impactFactor = smoothstep(ENERGY_THRESHOLD, 1.0, u_energy);
+    const float ENERGY_THRESHOLD = 0.0;
+    // float impactFactor = smoothstep(ENERGY_THRESHOLD, 1.0, u_energy);
+    float impactFactor = u_energy;
 
     // 1. Apparent & Crisp Grid Lines with Audio Wave Modulation
     vec2 pixelPos   = fragTexCoord * resolution;
