@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import random
 from pathlib import Path
@@ -14,16 +15,22 @@ UNIT = 48
 GRID_WIDTH = GAME_WIDTH // UNIT
 GRID_HEIGHT = GAME_HEIGHT // UNIT
 
-KEY_RIGHT = getattr(pr, "KEY_D", 68)
-KEY_LEFT = getattr(pr, "KEY_A", 65)
-KEY_DOWN = getattr(pr, "KEY_S", 83)
-KEY_SPACE = getattr(pr, "KEY_SPACE", 32)
-KEY_LEFT_ROTATE = getattr(pr, "KEY_Q", 81)
-KEY_RIGHT_ROTATE = getattr(pr, "KEY_E", 69)
-KEY_M = getattr(pr, "KEY_M", 77)
-KEY_P = getattr(pr, "KEY_P", 80)
-KEY_ESCAPE = getattr(pr, "KEY_ESCAPE", 256)
-KEY_UP = getattr(pr, "KEY_W", 87)
+SETTINGS_FILE = Path("settings.json")
+
+DEFAULT_KEYBINDINGS = {
+    "Move Left": getattr(pr, "KEY_A", 65),
+    "Move Right": getattr(pr, "KEY_D", 68),
+    "Soft Drop": getattr(pr, "KEY_S", 83),
+    "Hard Drop": getattr(pr, "KEY_SPACE", 32),
+    "Rotate Left": getattr(pr, "KEY_Q", 81),
+    "Rotate Right": getattr(pr, "KEY_E", 69),
+    "Pause Game": getattr(pr, "KEY_P", 80),
+}
+
+KEY_NAMES = {
+    65: "A", 68: "D", 83: "S", 87: "W", 81: "Q", 69: "E", 80: "P", 77: "M", 79: "O",
+    32: "SPACE", 256: "ESC", 262: "RIGHT", 263: "LEFT", 264: "DOWN", 265: "UP",
+}
 
 GAP = 2
 
@@ -87,6 +94,35 @@ def combined_audio_processor(buffer: Any, frames: int) -> None:
     audio_state["lpf_state"][1] = r_filt
     audio_state["raw_energy"] = math.sqrt(sq_sum / total_samples)
 
+
+def get_key_name(key_code: int) -> str:
+    if key_code in KEY_NAMES:
+        return KEY_NAMES[key_code]
+    if 32 <= key_code <= 126:
+        return chr(key_code).upper()
+    return f"KEY_{key_code}"
+
+def load_user_settings() -> dict[str, Any]:
+    defaults = {
+        "master_vol": 0.8,
+        "music_vol": 0.8,
+        "sfx_vol": 0.8,
+        "muffle_vol": 0.20,
+        "keybindings": DEFAULT_KEYBINDINGS.copy(),
+    }
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                data = json.load(f)
+                defaults["master_vol"] = data.get("master_vol", defaults["master_vol"])
+                defaults["music_vol"] = data.get("music_vol", defaults["music_vol"])
+                defaults["sfx_vol"] = data.get("sfx_vol", defaults["sfx_vol"])
+                defaults["muffle_vol"] = data.get("muffle_vol", defaults["muffle_vol"])
+                if "keybindings" in data and isinstance(data["keybindings"], dict):
+                    defaults["keybindings"].update(data["keybindings"])
+        except Exception:
+            pass
+    return defaults
 
 def draw_cell(x: float, y: float, color_idx: int, audio_energy: float = 0.0):
     if color_idx <= 0 or color_idx >= len(PALETTE):
@@ -164,16 +200,36 @@ class Tetris:
         self.fx_set = fx_set
         self.fx_clear = fx_clear
 
-        self.vol_master = 0.8
-        self.vol_music = 0.8
-        self.vol_sfx = 0.8
-        self.vol_muffle = 0.20
+        saved = load_user_settings()
+        self.vol_master = saved["master_vol"]
+        self.vol_music = saved["music_vol"]
+        self.vol_sfx = saved["sfx_vol"]
+        self.vol_muffle = saved["muffle_vol"]
+        self.keybindings = saved["keybindings"]
+
         self.settings_selected = 0
+        self.keybind_selected = 0
+        self.in_keybind_menu = False
+        self.rebinding = False
 
         self.mouse_pos = (0, 0)
         self.impact_trigger = False
         self.clear_trigger = False
         self.clear_row_uv = 0.5
+
+    def save_settings(self):
+        data = {
+            "master_vol": self.vol_master,
+            "music_vol": self.vol_music,
+            "sfx_vol": self.vol_sfx,
+            "muffle_vol": self.vol_muffle,
+            "keybindings": self.keybindings,
+        }
+        try:
+            with open(SETTINGS_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
 
     def update_volumes(self):
         pr.set_music_volume(self.music, self.vol_master * self.vol_music)
@@ -504,7 +560,16 @@ def main() -> None:
             pr.SHADER_UNIFORM_FLOAT,
         )
 
-        if pr.is_key_pressed(KEY_P):
+        kb = block.keybindings
+        k_left = kb["Move Left"]
+        k_right = kb["Move Right"]
+        k_down = kb["Soft Drop"]
+        k_drop = kb["Hard Drop"]
+        k_rot_l = kb["Rotate Left"]
+        k_rot_r = kb["Rotate Right"]
+        k_pause = kb["Pause Game"]
+
+        if pr.is_key_pressed(k_pause) and not block.rebinding:
             if block.game_state == "PLAYING":
                 block.game_state = "PAUSED"
                 if music:
@@ -514,8 +579,12 @@ def main() -> None:
                 if music:
                     pr.resume_music_stream(music)
 
-        elif pr.is_key_pressed(KEY_ESCAPE):
-            if block.game_state == "SETTINGS":
+        elif pr.is_key_pressed(getattr(pr, "KEY_ESCAPE", 256)):
+            if block.rebinding:
+                block.rebinding = False
+            elif block.in_keybind_menu:
+                block.in_keybind_menu = False
+            elif block.game_state == "SETTINGS":
                 block.game_state = block.previous_state
             elif block.game_state == "PLAYING":
                 block.game_state = "PAUSED"
@@ -527,69 +596,95 @@ def main() -> None:
                     pr.resume_music_stream(music)
 
         if block.game_state == "MENU":
-            if pr.is_key_pressed(KEY_RIGHT) or pr.is_key_pressed(
-                getattr(pr, "KEY_RIGHT", 262)
-            ):
+            if pr.is_key_pressed(k_right) or pr.is_key_pressed(262):
                 change_track(current_song_idx + 1)
-            elif pr.is_key_pressed(KEY_LEFT) or pr.is_key_pressed(
-                getattr(pr, "KEY_LEFT", 263)
-            ):
+            elif pr.is_key_pressed(k_left) or pr.is_key_pressed(263):
                 change_track(current_song_idx - 1)
 
-            if pr.is_key_pressed(KEY_SPACE):
+            if pr.is_key_pressed(k_drop):
                 start_gameplay()
             elif pr.is_key_pressed(getattr(pr, "KEY_O", 79)):
                 block.previous_state = "MENU"
                 block.game_state = "SETTINGS"
+                block.in_keybind_menu = False
 
         elif block.game_state == "SETTINGS":
-            if pr.is_key_pressed(KEY_DOWN) or pr.is_key_pressed(
-                getattr(pr, "KEY_DOWN", 264)
-            ):
-                block.settings_selected = (block.settings_selected + 1) % 4
-            elif pr.is_key_pressed(KEY_UP) or pr.is_key_pressed(
-                getattr(pr, "KEY_UP", 265)
-            ):
-                block.settings_selected = (block.settings_selected - 1) % 4
+            keys_list = list(block.keybindings.keys())
+            total_kb_items = len(keys_list) + 1
 
-            delta_val = 0.0
-            if pr.is_key_pressed(KEY_RIGHT) or pr.is_key_pressed(
-                getattr(pr, "KEY_RIGHT", 262)
-            ):
-                delta_val = 0.05
-            elif pr.is_key_pressed(KEY_LEFT) or pr.is_key_pressed(
-                getattr(pr, "KEY_LEFT", 263)
-            ):
-                delta_val = -0.05
+            if block.rebinding:
+                key_pressed = pr.get_key_pressed()
+                if key_pressed > 0:
+                    if key_pressed != getattr(pr, "KEY_ESCAPE", 256):
+                        target_key = keys_list[block.keybind_selected]
+                        block.keybindings[target_key] = key_pressed
+                    block.rebinding = False
+                    block.save_settings()
 
-            if delta_val != 0.0:
-                if block.settings_selected == 0:
-                    block.vol_master = max(
-                        0.0, min(1.0, block.vol_master + delta_val)
-                    )
-                elif block.settings_selected == 1:
-                    block.vol_music = max(
-                        0.0, min(1.0, block.vol_music + delta_val)
-                    )
-                elif block.settings_selected == 2:
-                    block.vol_sfx = max(
-                        0.0, min(1.0, block.vol_sfx + delta_val)
-                    )
-                elif block.settings_selected == 3:
-                    block.vol_muffle = max(
-                        0.0, min(1.0, block.vol_muffle + delta_val)
-                    )
-                block.update_volumes()
+            elif block.in_keybind_menu:
+                if pr.is_key_pressed(264) or pr.is_key_pressed(83):
+                    block.keybind_selected = (
+                        block.keybind_selected + 1
+                    ) % total_kb_items
+                elif pr.is_key_pressed(265) or pr.is_key_pressed(87):
+                    block.keybind_selected = (
+                        block.keybind_selected - 1
+                    ) % total_kb_items
+
+                if pr.is_key_pressed(32) or pr.is_key_pressed(257):
+                    if block.keybind_selected == len(keys_list):
+                        block.keybindings = DEFAULT_KEYBINDINGS.copy()
+                        block.save_settings()
+                    else:
+                        block.rebinding = True
+
+            else:
+                if pr.is_key_pressed(264) or pr.is_key_pressed(83):
+                    block.settings_selected = (block.settings_selected + 1) % 5
+                elif pr.is_key_pressed(265) or pr.is_key_pressed(87):
+                    block.settings_selected = (block.settings_selected - 1) % 5
+
+                if block.settings_selected == 4:
+                    if pr.is_key_pressed(32) or pr.is_key_pressed(257):
+                        block.in_keybind_menu = True
+                        block.keybind_selected = 0
+                else:
+                    delta_val = 0.0
+                    if pr.is_key_pressed(262) or pr.is_key_pressed(68):
+                        delta_val = 0.05
+                    elif pr.is_key_pressed(263) or pr.is_key_pressed(65):
+                        delta_val = -0.05
+
+                    if delta_val != 0.0:
+                        if block.settings_selected == 0:
+                            block.vol_master = max(
+                                0.0, min(1.0, block.vol_master + delta_val)
+                            )
+                        elif block.settings_selected == 1:
+                            block.vol_music = max(
+                                0.0, min(1.0, block.vol_music + delta_val)
+                            )
+                        elif block.settings_selected == 2:
+                            block.vol_sfx = max(
+                                0.0, min(1.0, block.vol_sfx + delta_val)
+                            )
+                        elif block.settings_selected == 3:
+                            block.vol_muffle = max(
+                                0.0, min(1.0, block.vol_muffle + delta_val)
+                            )
+                        block.update_volumes()
+                        block.save_settings()
 
         elif block.game_state == "PAUSED":
-            if pr.is_key_pressed(KEY_SPACE):
+            if pr.is_key_pressed(k_drop):
                 block.game_state = "PLAYING"
                 if music:
                     pr.resume_music_stream(music)
             elif pr.is_key_pressed(getattr(pr, "KEY_O", 79)):
                 block.previous_state = "PAUSED"
                 block.game_state = "SETTINGS"
-            elif pr.is_key_pressed(KEY_M):
+                block.in_keybind_menu = False
+            elif pr.is_key_pressed(getattr(pr, "KEY_M", 77)):
                 block.game_state = "MENU"
                 if music:
                     pr.resume_music_stream(music)
@@ -598,7 +693,7 @@ def main() -> None:
             block.fall_y += dt
             if beat_pulse > 0.8 and beat_cooldown >= 0.15:
                 block.fall_y += 0.8
-            if block.fall_y > block.y or pr.is_key_pressed(KEY_DOWN):
+            if block.fall_y > block.y or pr.is_key_pressed(k_down):
                 if not block.collision_check()["down"]:
                     block.fall_y = float(block.y)
                     block.y += 1
@@ -606,18 +701,18 @@ def main() -> None:
                     block.freeze()
                     block.play_sfx(fx_set)
 
-            if pr.is_key_pressed(KEY_SPACE) and block.y > 1:
+            if pr.is_key_pressed(k_drop) and block.y > 1:
                 block.y = block.fall_pos()
                 block.freeze()
                 block.play_sfx(fx_set)
 
             if (
-                pr.is_key_pressed(KEY_RIGHT)
-                or pr.is_key_pressed_repeat(KEY_RIGHT)
+                pr.is_key_pressed(k_right)
+                or pr.is_key_pressed_repeat(k_right)
             ) and not block.collision_check()["right"]:
                 block.x += 1
             elif (
-                pr.is_key_pressed(KEY_LEFT) or pr.is_key_pressed_repeat(KEY_LEFT)
+                pr.is_key_pressed(k_left) or pr.is_key_pressed_repeat(k_left)
             ) and not block.collision_check()["left"]:
                 block.x -= 1
 
@@ -645,20 +740,20 @@ def main() -> None:
                     block.x = next_x
 
             if (
-                pr.is_key_pressed(KEY_LEFT_ROTATE)
+                pr.is_key_pressed(k_rot_l)
                 and not block.collision_check_rotate()["left"]
             ):
                 block.rotation = (block.rotation + 1) % 4
             elif (
-                pr.is_key_pressed(KEY_RIGHT_ROTATE)
+                pr.is_key_pressed(k_rot_r)
                 and not block.collision_check_rotate()["right"]
             ):
                 block.rotation = (block.rotation - 1) % 4
 
         elif block.game_state == "GAMEOVER":
-            if pr.is_key_pressed(KEY_SPACE):
+            if pr.is_key_pressed(k_drop):
                 start_gameplay()
-            elif pr.is_key_pressed(KEY_M):
+            elif pr.is_key_pressed(getattr(pr, "KEY_M", 77)):
                 block.game_state = "MENU"
                 if music:
                     pr.resume_music_stream(music)
@@ -762,11 +857,11 @@ def main() -> None:
             )
 
             controls = [
-                "A / D : Select Track / Move",
-                "Q / E : Rotate Piece",
-                "S : Soft Drop",
-                "SPACE : Hard Drop",
-                "P / ESC : Pause Game",
+                f"{get_key_name(k_left)} / {get_key_name(k_right)} : Select Track / Move",
+                f"{get_key_name(k_rot_l)} / {get_key_name(k_rot_r)} : Rotate Piece",
+                f"{get_key_name(k_down)} : Soft Drop",
+                f"{get_key_name(k_drop)} : Hard Drop",
+                f"{get_key_name(k_pause)} / ESC : Pause Game",
             ]
             for idx, text in enumerate(controls):
                 cw = pr.measure_text(text, 15)
@@ -806,52 +901,81 @@ def main() -> None:
             pr.draw_rectangle(
                 0, 0, GAME_WIDTH, GAME_HEIGHT, pr.Color(12, 6, 8, 220)
             )
-            draw_panel(50, 180, 380, 520, "SETTINGS")
 
-            draw_slider(
-                90,
-                240,
-                300,
-                "Master Volume",
-                block.vol_master,
-                block.settings_selected == 0,
-            )
-            draw_slider(
-                90,
-                320,
-                300,
-                "Music Volume",
-                block.vol_music,
-                block.settings_selected == 1,
-            )
-            draw_slider(
-                90,
-                400,
-                300,
-                "SFX Volume",
-                block.vol_sfx,
-                block.settings_selected == 2,
-            )
-            draw_slider(
-                90,
-                480,
-                300,
-                "Gameplay Muffle",
-                block.vol_muffle,
-                block.settings_selected == 3,
-            )
+            if block.in_keybind_menu:
+                draw_panel(40, 140, 400, 680, "KEYBINDINGS")
 
-            hint = "W/S: Select  |  A/D: Adjust"
-            hint_w = pr.measure_text(hint, 15)
-            pr.draw_text(
-                hint, (GAME_WIDTH - hint_w) // 2, 580, 15, pr.RAYWHITE
-            )
+                keys_list = list(block.keybindings.keys())
+                for idx, action in enumerate(keys_list):
+                    selected = block.keybind_selected == idx
+                    c_hdr = COLOR_TETO_YELLOW if selected else pr.LIGHTGRAY
+                    y_offset = 200 + (idx * 48)
 
-            back = "PRESS ESC TO RETURN"
-            back_w = pr.measure_text(back, 14)
-            pr.draw_text(
-                back, (GAME_WIDTH - back_w) // 2, 620, 14, COLOR_TETO_YELLOW
-            )
+                    pr.draw_text(action, 80, y_offset, 18, c_hdr)
+
+                    if selected and block.rebinding:
+                        val_str = "< PRESS KEY >"
+                        val_col = COLOR_TETO_RED
+                    else:
+                        val_str = f"[ {get_key_name(block.keybindings[action])} ]"
+                        val_col = COLOR_TETO_YELLOW if selected else pr.GRAY
+
+                    pr.draw_text(val_str, 290, y_offset, 18, val_col)
+
+                rst_selected = block.keybind_selected == len(keys_list)
+                rst_col = COLOR_TETO_RED if rst_selected else pr.LIGHTGRAY
+                pr.draw_text(
+                    "RESET TO DEFAULTS",
+                    (GAME_WIDTH - pr.measure_text("RESET TO DEFAULTS", 18)) // 2,
+                    200 + (len(keys_list) * 48) + 15,
+                    18,
+                    rst_col,
+                )
+
+                hint = "SPACE/ENTER: Rebind  |  ESC: Back"
+                hint_w = pr.measure_text(hint, 14)
+                pr.draw_text(
+                    hint, (GAME_WIDTH - hint_w) // 2, 760, 14, pr.RAYWHITE
+                )
+
+            else:
+                draw_panel(50, 160, 380, 580, "SETTINGS")
+
+                draw_slider(
+                    90, 220, 300, "Master Volume", block.vol_master, block.settings_selected == 0
+                )
+                draw_slider(
+                    90, 300, 300, "Music Volume", block.vol_music, block.settings_selected == 1
+                )
+                draw_slider(
+                    90, 380, 300, "SFX Volume", block.vol_sfx, block.settings_selected == 2
+                )
+                draw_slider(
+                    90, 460, 300, "Gameplay Muffle", block.vol_muffle, block.settings_selected == 3
+                )
+
+                kb_hdr = (
+                    COLOR_TETO_YELLOW
+                    if block.settings_selected == 4
+                    else pr.LIGHTGRAY
+                )
+                kb_txt = "CONFIGURE KEYBINDINGS >"
+                kb_w = pr.measure_text(kb_txt, 18)
+                pr.draw_text(
+                    kb_txt, (GAME_WIDTH - kb_w) // 2, 560, 18, kb_hdr
+                )
+
+                hint = "W/S: Select  |  A/D: Adjust"
+                hint_w = pr.measure_text(hint, 15)
+                pr.draw_text(
+                    hint, (GAME_WIDTH - hint_w) // 2, 640, 15, pr.RAYWHITE
+                )
+
+                back = "PRESS ESC TO RETURN"
+                back_w = pr.measure_text(back, 14)
+                pr.draw_text(
+                    back, (GAME_WIDTH - back_w) // 2, 680, 14, COLOR_TETO_YELLOW
+                )
 
         elif block.game_state == "GAMEOVER":
             pr.draw_rectangle(
